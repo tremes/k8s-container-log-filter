@@ -34,12 +34,12 @@ func (c *ContainterLogFilter) Run(ctx context.Context) {
 	namespaceToAggregatedData := c.createNamespaceToAggregatedDataMap()
 
 	var wg sync.WaitGroup
-	for namespace, aggregatedData := range namespaceToAggregatedData {
-		log.Default().Printf("Start checking namespace %s for the Pod name pattern %s\n", namespace, aggregatedData.PodNameRegExpr)
+	for namespace, logRequest := range namespaceToAggregatedData {
+		log.Default().Printf("Start checking namespace %s for the Pod name pattern %s\n", namespace, logRequest.PodNameRegExpr)
 		wg.Add(1)
-		go func(namespace string, aggregatedData AggregatedNamespaceData) {
+		go func(namespace string, logRequest LogRequest) {
 			defer wg.Done()
-			podNameRegex := regexp.MustCompile(aggregatedData.PodNameRegExpr)
+			podNameRegex := regexp.MustCompile(logRequest.PodNameRegExpr)
 			podToContainers, err := c.createPodToContainersMap(ctx, namespace, *podNameRegex)
 			if err != nil {
 				log.Fatalf("Failed to get matching pod names for namespace %s: %v\n", namespace, err)
@@ -72,12 +72,12 @@ func (c *ContainterLogFilter) Run(ctx context.Context) {
 							log.Fatalf("failed to write to file %s: %v", path, err)
 						}
 
-					}(namespace, podName, container, aggregatedData.Messages)
+					}(namespace, podName, container, logRequest.Messages)
 				}
 			}
 			wgContainers.Wait()
 
-		}(namespace, aggregatedData)
+		}(namespace, logRequest)
 	}
 	wg.Wait()
 }
@@ -107,20 +107,20 @@ func (c *ContainterLogFilter) createPodToContainersMap(ctx context.Context, name
 	return podContainers, nil
 }
 
-func (c *ContainterLogFilter) createNamespaceToAggregatedDataMap() map[string]AggregatedNamespaceData {
-	mapNamespaceToRegex := make(map[string]AggregatedNamespaceData)
+func (c *ContainterLogFilter) createNamespaceToAggregatedDataMap() map[string]LogRequest {
+	mapNamespaceToLogRequest := make(map[string]LogRequest)
 	for _, logRequest := range c.logRequestsObj.LogRequests {
-		aggregatedData := mapNamespaceToRegex[logRequest.Namespace]
+		existingLogRequest := mapNamespaceToLogRequest[logRequest.Namespace]
 		// TODO: use set for the messages to avoid duplicates?
-		aggregatedData.Messages = append(aggregatedData.Messages, logRequest.Messages...)
-		if aggregatedData.PodNameRegExpr == "" {
-			aggregatedData.PodNameRegExpr = logRequest.PodNameRegExpr.String()
+		existingLogRequest.Messages = append(existingLogRequest.Messages, logRequest.Messages...)
+		if existingLogRequest.PodNameRegExpr == "" {
+			existingLogRequest.PodNameRegExpr = logRequest.PodNameRegExpr
 		} else {
-			aggregatedData.PodNameRegExpr = fmt.Sprintf("%s|%s", aggregatedData.PodNameRegExpr, logRequest.PodNameRegExpr.String())
+			existingLogRequest.PodNameRegExpr = fmt.Sprintf("%s|%s", existingLogRequest.PodNameRegExpr, logRequest.PodNameRegExpr)
 		}
-		mapNamespaceToRegex[logRequest.Namespace] = aggregatedData
+		mapNamespaceToLogRequest[logRequest.Namespace] = existingLogRequest
 	}
-	return mapNamespaceToRegex
+	return mapNamespaceToLogRequest
 }
 
 func (c *ContainterLogFilter) getAndFilterContainerLogs(ctx context.Context, namespace, podName, containerName string, messages []string) ([]string, error) {
