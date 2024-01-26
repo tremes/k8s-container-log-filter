@@ -1,0 +1,1 @@
+# k8s-container-log-filter
