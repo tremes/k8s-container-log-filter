@@ -19,12 +19,14 @@ import (
 type ContainterLogFilter struct {
 	kubeClient     kubernetes.Clientset
 	logRequestsObj LogRequestsObject
+	sinceSeconds   *int64
 }
 
-func New(kubeClient kubernetes.Clientset, logRequests LogRequestsObject) *ContainterLogFilter {
+func New(kubeClient kubernetes.Clientset, logRequests LogRequestsObject, sinceSeconds int64) *ContainterLogFilter {
 	return &ContainterLogFilter{
 		kubeClient:     kubeClient,
 		logRequestsObj: logRequests,
+		sinceSeconds:   &sinceSeconds,
 	}
 }
 
@@ -40,7 +42,7 @@ func (c *ContainterLogFilter) Run(ctx context.Context) {
 			podNameRegex := regexp.MustCompile(aggregatedData.PodNameRegExpr)
 			podToContainers, err := c.createPodToContainersMap(ctx, namespace, *podNameRegex)
 			if err != nil {
-				fmt.Printf("Failed to get matching pod names: %v\n", err)
+				log.Fatalf("Failed to get matching pod names for namespace %s: %v\n", namespace, err)
 				return
 			}
 
@@ -122,10 +124,10 @@ func (c *ContainterLogFilter) createNamespaceToAggregatedDataMap() map[string]Ag
 }
 
 func (c *ContainterLogFilter) getAndFilterContainerLogs(ctx context.Context, namespace, podName, containerName string, messages []string) ([]string, error) {
-	sinceSeconds := int64(86400)
 	req := c.kubeClient.CoreV1().Pods(namespace).GetLogs(podName, &corev1.PodLogOptions{
 		Container:    containerName,
-		SinceSeconds: &sinceSeconds,
+		SinceSeconds: c.sinceSeconds,
+		Timestamps:   true,
 	})
 	reader, err := req.Stream(ctx)
 	if err != nil {
