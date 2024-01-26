@@ -35,27 +35,28 @@ func (c *ContainterLogFilter) Run(ctx context.Context) {
 	for namespace, aggregatedData := range namespaceToAggregatedData {
 		log.Default().Printf("Start checking namespace %s for the Pod name pattern %s\n", namespace, aggregatedData.PodNameRegExpr)
 		wg.Add(1)
-		go func(namespace string, regexToCompile string) {
+		go func(namespace string, aggregatedData AggregatedNamespaceData) {
 			defer wg.Done()
-			podNameRegex := regexp.MustCompile(regexToCompile)
+			podNameRegex := regexp.MustCompile(aggregatedData.PodNameRegExpr)
 			podToContainers, err := c.createPodToContainersMap(ctx, namespace, *podNameRegex)
 			if err != nil {
 				fmt.Printf("Failed to get matching pod names: %v\n", err)
 				return
 			}
-			var wg sync.WaitGroup
+
+			var wgContainers sync.WaitGroup
 			for podName, containersaNames := range podToContainers {
-				wg.Add(len(containersaNames))
+				wgContainers.Add(len(containersaNames))
 				for _, container := range containersaNames {
-					go func(namespace, podName, containerName string) {
-						defer wg.Done()
-						stringData, err := c.getAndFilterContainerLogs(ctx, namespace, podName, containerName, aggregatedData.Messages)
+					go func(namespace, podName, containerName string, messages []string) {
+						defer wgContainers.Done()
+						stringData, err := c.getAndFilterContainerLogs(ctx, namespace, podName, containerName, messages)
 						if err != nil {
 							log.Fatalf("Can't read the container logs for namespace %s and container %s: %v\n", namespace, containerName, err)
 							return
 						}
 						if len(stringData) == 0 {
-							log.Default().Printf("Not found anything in the namespace %s for Pod name %s", namespace, podName)
+							//log.Default().Printf("Not found anything in the namespace %s for Pod name %s", namespace, podName)
 							return
 						}
 						path := fmt.Sprintf("log_data/%s/%s/%s", namespace, podName, containerName)
@@ -69,11 +70,12 @@ func (c *ContainterLogFilter) Run(ctx context.Context) {
 							log.Fatalf("failed to write to file %s: %v", path, err)
 						}
 
-					}(namespace, podName, container)
+					}(namespace, podName, container, aggregatedData.Messages)
 				}
 			}
-			wg.Wait()
-		}(namespace, aggregatedData.PodNameRegExpr)
+			wgContainers.Wait()
+
+		}(namespace, aggregatedData)
 	}
 	wg.Wait()
 }
