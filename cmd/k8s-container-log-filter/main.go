@@ -14,6 +14,7 @@ import (
 )
 
 func main() {
+	startTime := time.Now()
 	kubeConfigPath, logRequestsFile, timeout, sinceSeconds := parseArgs()
 	kubeCli, err := initKubeClient(kubeConfigPath)
 	if err != nil {
@@ -33,6 +34,8 @@ func main() {
 	log.Default().Printf("Logs filtered back %d hours", sinceSeconds/60/60)
 	clf := containerlogfilter.New(*kubeCli, logRequests, sinceSeconds)
 	clf.Run(ctx)
+	executionTime := time.Now().Sub(startTime)
+	log.Default().Printf("Program finished in %s", executionTime)
 }
 
 func initKubeClient(kubeConfigPath string) (*kubernetes.Clientset, error) {
