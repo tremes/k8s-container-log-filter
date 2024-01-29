@@ -13,6 +13,7 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/util/sets"
 	"k8s.io/client-go/kubernetes"
 )
 
@@ -31,18 +32,18 @@ func New(kubeClient kubernetes.Clientset, logRequests LogRequestsObject, sinceSe
 }
 
 func (c *ContainterLogFilter) Run(ctx context.Context) {
-	namespaceToAggregatedData := c.createNamespaceToAggregatedDataMap()
+	namespaceToLogRequest := c.createNamespaceToLogRequestMap()
 
 	var wg sync.WaitGroup
-	for namespace, logRequest := range namespaceToAggregatedData {
-		log.Default().Printf("Start checking namespace %s for the Pod name pattern %s\n", namespace, logRequest.PodNameRegExpr)
+	for _, logRequest := range namespaceToLogRequest {
+		log.Default().Printf("Start checking namespace %s for the Pod name pattern %s\n", logRequest.Namespace, logRequest.PodNameRegex)
 		wg.Add(1)
-		go func(namespace string, logRequest LogRequest) {
+		go func(logRequest LogRequest) {
 			defer wg.Done()
-			podNameRegex := regexp.MustCompile(logRequest.PodNameRegExpr)
-			podToContainers, err := c.createPodToContainersMap(ctx, namespace, *podNameRegex)
+			podNameRegex := regexp.MustCompile(logRequest.PodNameRegex)
+			podToContainers, err := c.createPodToContainersMap(ctx, logRequest.Namespace, *podNameRegex)
 			if err != nil {
-				log.Fatalf("Failed to get matching pod names for namespace %s: %v\n", namespace, err)
+				log.Fatalf("Failed to get matching pod names for namespace %s: %v\n", logRequest.Namespace, err)
 				return
 			}
 
@@ -50,7 +51,7 @@ func (c *ContainterLogFilter) Run(ctx context.Context) {
 			for podName, containersaNames := range podToContainers {
 				wgContainers.Add(len(containersaNames))
 				for _, container := range containersaNames {
-					go func(namespace, podName, containerName string, messages []string) {
+					go func(namespace, podName, containerName string, messages sets.Set[string]) {
 						defer wgContainers.Done()
 						stringData, err := c.getAndFilterContainerLogs(ctx, namespace, podName, containerName, messages)
 						if err != nil {
@@ -72,12 +73,12 @@ func (c *ContainterLogFilter) Run(ctx context.Context) {
 							log.Fatalf("failed to write to file %s: %v", path, err)
 						}
 
-					}(namespace, podName, container, logRequest.Messages)
+					}(logRequest.Namespace, podName, container, logRequest.Messages)
 				}
 			}
 			wgContainers.Wait()
 
-		}(namespace, logRequest)
+		}(logRequest)
 	}
 	wg.Wait()
 }
@@ -107,23 +108,28 @@ func (c *ContainterLogFilter) createPodToContainersMap(ctx context.Context, name
 	return podContainers, nil
 }
 
-func (c *ContainterLogFilter) createNamespaceToAggregatedDataMap() map[string]LogRequest {
+func (c *ContainterLogFilter) createNamespaceToLogRequestMap() map[string]LogRequest {
 	mapNamespaceToLogRequest := make(map[string]LogRequest)
 	for _, logRequest := range c.logRequestsObj.LogRequests {
-		existingLogRequest := mapNamespaceToLogRequest[logRequest.Namespace]
-		// TODO: use set for the messages to avoid duplicates?
-		existingLogRequest.Messages = append(existingLogRequest.Messages, logRequest.Messages...)
-		if existingLogRequest.PodNameRegExpr == "" {
-			existingLogRequest.PodNameRegExpr = logRequest.PodNameRegExpr
-		} else {
-			existingLogRequest.PodNameRegExpr = fmt.Sprintf("%s|%s", existingLogRequest.PodNameRegExpr, logRequest.PodNameRegExpr)
+		existingLogRequest, ok := mapNamespaceToLogRequest[logRequest.Namespace]
+
+		if !ok {
+			mapNamespaceToLogRequest[logRequest.Namespace] = LogRequest{
+				Namespace:    logRequest.Namespace,
+				PodNameRegex: logRequest.PodNameRegex,
+				Messages:     sets.Set[string](sets.NewString(logRequest.Messages...)),
+			}
+			continue
 		}
+
+		existingLogRequest.Messages = existingLogRequest.Messages.Union(sets.New[string](logRequest.Messages...))
+		existingLogRequest.PodNameRegex = fmt.Sprintf("%s|%s", existingLogRequest.PodNameRegex, logRequest.PodNameRegex)
 		mapNamespaceToLogRequest[logRequest.Namespace] = existingLogRequest
 	}
 	return mapNamespaceToLogRequest
 }
 
-func (c *ContainterLogFilter) getAndFilterContainerLogs(ctx context.Context, namespace, podName, containerName string, messages []string) ([]string, error) {
+func (c *ContainterLogFilter) getAndFilterContainerLogs(ctx context.Context, namespace, podName, containerName string, messages sets.Set[string]) ([]string, error) {
 	req := c.kubeClient.CoreV1().Pods(namespace).GetLogs(podName, &corev1.PodLogOptions{
 		Container:    containerName,
 		SinceSeconds: c.sinceSeconds,
@@ -147,9 +153,9 @@ func (c *ContainterLogFilter) getAndFilterContainerLogs(ctx context.Context, nam
 	return matchedLines, nil
 }
 
-func stringInSlice(slc []string, s string) bool {
-	for _, slcStr := range slc {
-		if strings.Contains(s, slcStr) {
+func stringInSlice(set sets.Set[string], s string) bool {
+	for str := range set {
+		if strings.Contains(s, str) {
 			return true
 		}
 	}

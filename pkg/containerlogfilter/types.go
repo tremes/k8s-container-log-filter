@@ -1,16 +1,24 @@
 package containerlogfilter
 
+import "k8s.io/apimachinery/pkg/util/sets"
+
 type LogRequestsObject struct {
-	LogRequests LogRequests `json:"log_requests"`
+	LogRequests LogRequestDefinitions `json:"log_requests"`
 }
 
-type LogRequests []LogRequest
+type LogRequestDefinitions []LogRequestDefinition
 
-// LogRequest represents a request to filter and collect particular messages
+// LogRequestDefinition represents a request to filter and collect particular messages
 // from particular containers.
 // This is data provided by the user.
+type LogRequestDefinition struct {
+	Namespace    string   `json:"namespace"`
+	PodNameRegex string   `json:"pod_name_regex"`
+	Messages     []string `json:"messages"`
+}
+
 type LogRequest struct {
-	Namespace      string   `json:"namespace"`
-	PodNameRegExpr string   `json:"pod_name_regex"`
-	Messages       []string `json:"messages"`
+	Namespace    string
+	PodNameRegex string
+	Messages     sets.Set[string]
 }
