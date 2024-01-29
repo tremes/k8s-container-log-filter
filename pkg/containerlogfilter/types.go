@@ -22,3 +22,10 @@ type LogRequest struct {
 	PodNameRegex string
 	Messages     sets.Set[string]
 }
+
+type ContainerLogRequest struct {
+	Namespace     string
+	PodName       string
+	ContainerName string
+	Messages      sets.Set[string]
+}

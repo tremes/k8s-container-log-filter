@@ -51,19 +51,27 @@ func (c *ContainterLogFilter) Run(ctx context.Context) {
 			for podName, containersaNames := range podToContainers {
 				wgContainers.Add(len(containersaNames))
 				for _, container := range containersaNames {
-					go func(namespace, podName, containerName string, messages sets.Set[string]) {
+					containerLogReq := ContainerLogRequest{
+						Namespace:     logRequest.Namespace,
+						ContainerName: container,
+						PodName:       podName,
+						Messages:      logRequest.Messages,
+					}
+					go func(containerLogReq ContainerLogRequest) {
 						defer wgContainers.Done()
-						stringData, err := c.getAndFilterContainerLogs(ctx, namespace, podName, containerName, messages)
+						stringData, err := c.getAndFilterContainerLogs(ctx, containerLogReq)
 						if err != nil {
-							log.Fatalf("Can't read the container logs for namespace %s and container %s: %v\n", namespace, containerName, err)
+							log.Fatalf("Can't read the container logs for namespace %s and container %s: %v\n",
+								containerLogReq.Namespace, containerLogReq.ContainerName, err)
 							return
 						}
 						if len(stringData) == 0 {
 							//log.Default().Printf("Not found anything in the namespace %s for Pod name %s", namespace, podName)
 							return
 						}
-						path := fmt.Sprintf("log_data/%s/%s/%s", namespace, podName, containerName)
-						dirPath := fmt.Sprintf("log_data/%s/%s/", namespace, podName)
+						path := fmt.Sprintf("log_data/%s/%s/%s",
+							containerLogReq.Namespace, containerLogReq.PodName, containerLogReq.ContainerName)
+						dirPath := fmt.Sprintf("log_data/%s/%s/", containerLogReq.Namespace, containerLogReq.PodName)
 						err = os.MkdirAll(dirPath, os.ModePerm)
 						if err != nil {
 							log.Fatalf("failed to create output dir: %v", err)
@@ -73,7 +81,7 @@ func (c *ContainterLogFilter) Run(ctx context.Context) {
 							log.Fatalf("failed to write to file %s: %v", path, err)
 						}
 
-					}(logRequest.Namespace, podName, container, logRequest.Messages)
+					}(containerLogReq)
 				}
 			}
 			wgContainers.Wait()
@@ -129,9 +137,9 @@ func (c *ContainterLogFilter) createNamespaceToLogRequestMap() map[string]LogReq
 	return mapNamespaceToLogRequest
 }
 
-func (c *ContainterLogFilter) getAndFilterContainerLogs(ctx context.Context, namespace, podName, containerName string, messages sets.Set[string]) ([]string, error) {
-	req := c.kubeClient.CoreV1().Pods(namespace).GetLogs(podName, &corev1.PodLogOptions{
-		Container:    containerName,
+func (c *ContainterLogFilter) getAndFilterContainerLogs(ctx context.Context, containerLogRequest ContainerLogRequest) ([]string, error) {
+	req := c.kubeClient.CoreV1().Pods(containerLogRequest.Namespace).GetLogs(containerLogRequest.PodName, &corev1.PodLogOptions{
+		Container:    containerLogRequest.ContainerName,
 		SinceSeconds: c.sinceSeconds,
 		Timestamps:   true,
 	})
@@ -145,7 +153,7 @@ func (c *ContainterLogFilter) getAndFilterContainerLogs(ctx context.Context, nam
 	for scanner.Scan() {
 		text := scanner.Text()
 		// TODO match regex instead ??
-		if stringInSlice(messages, text) {
+		if stringInSlice(containerLogRequest.Messages, text) {
 			matchedLines = append(matchedLines, text)
 		}
 	}
