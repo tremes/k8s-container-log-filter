@@ -40,7 +40,12 @@ func (c *ContainterLogFilter) Run(ctx context.Context) {
 		wg.Add(1)
 		go func(logRequest LogRequest) {
 			defer wg.Done()
-			podNameRegex := regexp.MustCompile(logRequest.PodNameRegex)
+			podNameRegex, err := regexp.Compile(logRequest.PodNameRegex)
+			if err != nil {
+				log.Fatalf("Failed to compile Pod name regular expression %s for the namespace %s: %v\n",
+					logRequest.PodNameRegex, logRequest.Namespace, err)
+				return
+			}
 			podToContainers, err := c.createPodToContainersMap(ctx, logRequest.Namespace, *podNameRegex)
 			if err != nil {
 				log.Fatalf("Failed to get matching pod names for namespace %s: %v\n", logRequest.Namespace, err)
@@ -69,7 +74,7 @@ func (c *ContainterLogFilter) Run(ctx context.Context) {
 							//log.Default().Printf("Not found anything in the namespace %s for Pod name %s", namespace, podName)
 							return
 						}
-						path := fmt.Sprintf("log_data/%s/%s/%s",
+						path := fmt.Sprintf("log_data/%s/%s/%s.log",
 							containerLogReq.Namespace, containerLogReq.PodName, containerLogReq.ContainerName)
 						dirPath := fmt.Sprintf("log_data/%s/%s/", containerLogReq.Namespace, containerLogReq.PodName)
 						err = os.MkdirAll(dirPath, os.ModePerm)
@@ -116,6 +121,9 @@ func (c *ContainterLogFilter) createPodToContainersMap(ctx context.Context, name
 	return podContainers, nil
 }
 
+// createNamespaceToLogRequestMap creates and returns a map that maps a namespace name to a specific log request.
+// If there are two or more log requests for the same namespace,
+// the log request attributes (such as Pod name regex, Messages) are aggregated into a single log request.
 func (c *ContainterLogFilter) createNamespaceToLogRequestMap() map[string]LogRequest {
 	mapNamespaceToLogRequest := make(map[string]LogRequest)
 	for _, logRequest := range c.logRequestsObj.LogRequests {
