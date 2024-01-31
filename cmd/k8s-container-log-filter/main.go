@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"flag"
+	"fmt"
 	"k8s-container-log-filter/pkg/containerlogfilter"
 	"log"
 	"os"
@@ -15,7 +16,7 @@ import (
 
 func main() {
 	startTime := time.Now()
-	kubeConfigPath, logRequestsFile, timeout, sinceSeconds := parseArgs()
+	kubeConfigPath, logRequestsFile, timeout, sinceHours := parseArgs()
 	kubeCli, err := initKubeClient(kubeConfigPath)
 	if err != nil {
 		log.Fatalf("Failed to create Kubernetes client client: %v\n", err)
@@ -31,8 +32,8 @@ func main() {
 		log.Fatalf("Failed to read log requests data: %v", err)
 		return
 	}
-	log.Default().Printf("Logs filtered back %d hours", sinceSeconds/60/60)
-	clf := containerlogfilter.New(*kubeCli, logRequests, sinceSeconds)
+	log.Default().Printf("Logs filtered back %d hours", sinceHours)
+	clf := containerlogfilter.New(*kubeCli, logRequests, sinceHours*60*60)
 	clf.Run(ctx)
 	executionTime := time.Since(startTime)
 	log.Default().Printf("Program finished in %s", executionTime)
@@ -63,17 +64,18 @@ func readInputDataAndUnmarshal(fileName string) (containerlogfilter.LogRequestsO
 func parseArgs() (string, string, int, int64) {
 	var kubeConfigPath, logRequestsFile string
 	var timeout int
-	var sinceSeconds int64
+	var sinceHours int64
 
-	flag.StringVar(&kubeConfigPath, "kubeconfig", "", "Path to kubeconcfig file")
+	flag.StringVar(&kubeConfigPath, "kubeconfig", fmt.Sprintf("%s/%s", os.Getenv("HOME"), ".kube/config"),
+		"Path to kubeconfig file")
 	flag.IntVar(&timeout, "timeout", 2, "Timeout in minutes. Default value is 2 minutes")
 	flag.StringVar(&logRequestsFile, "log_requests_file", "log_requests.json", "Path to the file with log requests definition")
-	flag.Int64Var(&sinceSeconds, "since_seconds", 86400, " Tells how old logs should be filtered")
+	flag.Int64Var(&sinceHours, "since_hours", 24, " Tells how old logs should be filtered")
 
 	flag.Parse()
 	if kubeConfigPath == "" {
 		flag.PrintDefaults()
 		os.Exit(1)
 	}
-	return kubeConfigPath, logRequestsFile, timeout, sinceSeconds
+	return kubeConfigPath, logRequestsFile, timeout, sinceHours
 }
