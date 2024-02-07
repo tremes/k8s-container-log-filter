@@ -66,7 +66,7 @@ func (c *ContainterLogFilter) Run(ctx context.Context) {
 						defer wgContainers.Done()
 						stringData, err := c.getAndFilterContainerLogs(ctx, containerLogReq)
 						if err != nil {
-							log.Fatalf("Can't read the container logs for namespace %s and container %s: %v\n",
+							log.Default().Printf("Can't read the container logs for namespace %s and container %s: %v\n",
 								containerLogReq.Namespace, containerLogReq.ContainerName, err)
 							return
 						}
