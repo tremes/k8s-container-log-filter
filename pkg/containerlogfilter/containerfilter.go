@@ -145,7 +145,7 @@ func (c *ContainterLogFilter) createNamespaceToLogRequestMap() map[string]LogReq
 	return mapNamespaceToLogRequest
 }
 
-func (c *ContainterLogFilter) getAndFilterContainerLogs(ctx context.Context, containerLogRequest ContainerLogRequest) ([]string, error) {
+func (c *ContainterLogFilter) getAndFilterContainerLogs(ctx context.Context, containerLogRequest ContainerLogRequest) (string, error) {
 	req := c.kubeClient.CoreV1().Pods(containerLogRequest.Namespace).GetLogs(containerLogRequest.PodName, &corev1.PodLogOptions{
 		Container:    containerLogRequest.ContainerName,
 		SinceSeconds: c.sinceSeconds,
@@ -153,20 +153,20 @@ func (c *ContainterLogFilter) getAndFilterContainerLogs(ctx context.Context, con
 	})
 	reader, err := req.Stream(ctx)
 	if err != nil {
-		return nil, err
+		return "", err
 	}
 	scanner := bufio.NewScanner(reader)
 
-	var matchedLines []string
+	var sb strings.Builder
 	for scanner.Scan() {
 		text := scanner.Text()
 		// TODO match regex instead ??
 		if stringInSlice(containerLogRequest.Messages, text) {
-			matchedLines = append(matchedLines, text)
+			sb.WriteString(fmt.Sprintf("%s\n", text))
 		}
 	}
 
-	return matchedLines, nil
+	return sb.String(), nil
 }
 
 func stringInSlice(set sets.Set[string], s string) bool {
