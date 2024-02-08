@@ -1,6 +1,10 @@
 package containerlogfilter
 
-import "k8s.io/apimachinery/pkg/util/sets"
+import (
+	"regexp"
+
+	"k8s.io/apimachinery/pkg/util/sets"
+)
 
 type LogRequestsObject struct {
 	LogRequests LogRequestDefinitions `json:"log_requests"`
@@ -27,5 +31,5 @@ type ContainerLogRequest struct {
 	Namespace     string
 	PodName       string
 	ContainerName string
-	Messages      sets.Set[string]
+	MessageRegex  *regexp.Regexp
 }

@@ -40,6 +40,12 @@ func (c *ContainterLogFilter) Run(ctx context.Context) {
 	for _, logRequest := range namespaceToLogRequest {
 		log.Default().Printf("Start checking namespace %s for the Pod name pattern %s\n", logRequest.Namespace, logRequest.PodNameRegex)
 
+		messagesRegex, err := listOfMessagesToRegex(logRequest.Messages)
+		if err != nil {
+			log.Default().Printf("Can't compile regex for %s: %v", logRequest.Namespace, err)
+			continue
+		}
+
 		for podNameRegex := range logRequest.PodNameRegex {
 			wg.Add(1)
 			go func(logRequest LogRequest, podNameRegexStr string) {
@@ -65,17 +71,15 @@ func (c *ContainterLogFilter) Run(ctx context.Context) {
 							Namespace:     logRequest.Namespace,
 							ContainerName: container,
 							PodName:       podName,
-							Messages:      logRequest.Messages,
+							MessageRegex:  messagesRegex,
 						}
 						go func() {
 							defer wgContainers.Done()
 							c.getLogAndWriteToFile(ctx, containerLogReq)
-							return
 						}()
 					}
 				}
 				wgContainers.Wait()
-
 			}(logRequest, podNameRegex)
 		}
 	}
@@ -147,8 +151,7 @@ func (c *ContainterLogFilter) getAndFilterContainerLogs(ctx context.Context, con
 	var sb strings.Builder
 	for scanner.Scan() {
 		text := scanner.Text()
-		// TODO match regex instead ??
-		if stringInSlice(containerLogRequest.Messages, text) {
+		if containerLogRequest.MessageRegex.MatchString(text) {
 			sb.WriteString(fmt.Sprintf("%s\n", text))
 		}
 	}
@@ -178,11 +181,15 @@ func (c *ContainterLogFilter) getLogAndWriteToFile(ctx context.Context, containe
 		log.Fatalf("failed to write to file %s: %v", path, err)
 	}
 }
-func stringInSlice(set sets.Set[string], s string) bool {
-	for str := range set {
-		if strings.Contains(s, str) {
-			return true
-		}
+
+func listOfMessagesToRegex(messages sets.Set[string]) (*regexp.Regexp, error) {
+	regexStr := messages.UnsortedList()[0]
+	if len(messages) == 1 {
+		return regexp.Compile(regexStr)
 	}
-	return false
+
+	for m := range messages {
+		regexStr = fmt.Sprintf("%s|%s", regexStr, m)
+	}
+	return regexp.Compile(regexStr)
 }
