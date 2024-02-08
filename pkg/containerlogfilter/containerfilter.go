@@ -10,6 +10,7 @@ import (
 	"regexp"
 	"strings"
 	"sync"
+	"sync/atomic"
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -33,67 +34,53 @@ func New(kubeClient kubernetes.Clientset, logRequests LogRequestsObject, sinceSe
 
 func (c *ContainterLogFilter) Run(ctx context.Context) {
 	namespaceToLogRequest := c.createNamespaceToLogRequestMap()
+	var numberOfContainers atomic.Int32
 
 	var wg sync.WaitGroup
 	for _, logRequest := range namespaceToLogRequest {
 		log.Default().Printf("Start checking namespace %s for the Pod name pattern %s\n", logRequest.Namespace, logRequest.PodNameRegex)
-		wg.Add(1)
-		go func(logRequest LogRequest) {
-			defer wg.Done()
-			podNameRegex, err := regexp.Compile(logRequest.PodNameRegex)
-			if err != nil {
-				log.Fatalf("Failed to compile Pod name regular expression %s for the namespace %s: %v\n",
-					logRequest.PodNameRegex, logRequest.Namespace, err)
-				return
-			}
-			podToContainers, err := c.createPodToContainersMap(ctx, logRequest.Namespace, *podNameRegex)
-			if err != nil {
-				log.Fatalf("Failed to get matching pod names for namespace %s: %v\n", logRequest.Namespace, err)
-				return
-			}
 
-			var wgContainers sync.WaitGroup
-			for podName, containersaNames := range podToContainers {
-				wgContainers.Add(len(containersaNames))
-				for _, container := range containersaNames {
-					containerLogReq := ContainerLogRequest{
-						Namespace:     logRequest.Namespace,
-						ContainerName: container,
-						PodName:       podName,
-						Messages:      logRequest.Messages,
-					}
-					go func(containerLogReq ContainerLogRequest) {
-						defer wgContainers.Done()
-						stringData, err := c.getAndFilterContainerLogs(ctx, containerLogReq)
-						if err != nil {
-							log.Default().Printf("Can't read the container logs for namespace %s and container %s: %v\n",
-								containerLogReq.Namespace, containerLogReq.ContainerName, err)
-							return
-						}
-						if len(stringData) == 0 {
-							//log.Default().Printf("Not found anything in the namespace %s for Pod name %s", namespace, podName)
-							return
-						}
-						path := fmt.Sprintf("log_data/%s/%s/%s.log",
-							containerLogReq.Namespace, containerLogReq.PodName, containerLogReq.ContainerName)
-						dirPath := fmt.Sprintf("log_data/%s/%s/", containerLogReq.Namespace, containerLogReq.PodName)
-						err = os.MkdirAll(dirPath, os.ModePerm)
-						if err != nil {
-							log.Fatalf("failed to create output dir: %v", err)
-						}
-						err = fileUtils.WriteToFile(path, stringData)
-						if err != nil {
-							log.Fatalf("failed to write to file %s: %v", path, err)
-						}
-
-					}(containerLogReq)
+		for podNameRegex := range logRequest.PodNameRegex {
+			wg.Add(1)
+			go func(logRequest LogRequest, podNameRegexStr string) {
+				defer wg.Done()
+				podNameRegex, err := regexp.Compile(podNameRegexStr)
+				if err != nil {
+					log.Fatalf("Failed to compile Pod name regular expression %s for the namespace %s: %v\n",
+						logRequest.PodNameRegex, logRequest.Namespace, err)
+					return
 				}
-			}
-			wgContainers.Wait()
+				podToContainers, err := c.createPodToContainersMap(ctx, logRequest.Namespace, *podNameRegex)
+				if err != nil {
+					log.Fatalf("Failed to get matching pod names for namespace %s: %v\n", logRequest.Namespace, err)
+					return
+				}
 
-		}(logRequest)
+				var wgContainers sync.WaitGroup
+				for podName, containersaNames := range podToContainers {
+					wgContainers.Add(len(containersaNames))
+					for _, container := range containersaNames {
+						numberOfContainers.Add(1)
+						containerLogReq := ContainerLogRequest{
+							Namespace:     logRequest.Namespace,
+							ContainerName: container,
+							PodName:       podName,
+							Messages:      logRequest.Messages,
+						}
+						go func() {
+							defer wgContainers.Done()
+							c.getLogAndWriteToFile(ctx, containerLogReq)
+							return
+						}()
+					}
+				}
+				wgContainers.Wait()
+
+			}(logRequest, podNameRegex)
+		}
 	}
 	wg.Wait()
+	log.Default().Printf("Number of checked containers %d", numberOfContainers.Load())
 }
 
 // createPodToContainersMap lists all the Pods in the provided namespace
@@ -132,14 +119,14 @@ func (c *ContainterLogFilter) createNamespaceToLogRequestMap() map[string]LogReq
 		if !ok {
 			mapNamespaceToLogRequest[logRequest.Namespace] = LogRequest{
 				Namespace:    logRequest.Namespace,
-				PodNameRegex: logRequest.PodNameRegex,
+				PodNameRegex: sets.Set[string](sets.NewString(logRequest.PodNameRegex)),
 				Messages:     sets.Set[string](sets.NewString(logRequest.Messages...)),
 			}
 			continue
 		}
 
 		existingLogRequest.Messages = existingLogRequest.Messages.Union(sets.New[string](logRequest.Messages...))
-		existingLogRequest.PodNameRegex = fmt.Sprintf("%s|%s", existingLogRequest.PodNameRegex, logRequest.PodNameRegex)
+		existingLogRequest.PodNameRegex = existingLogRequest.PodNameRegex.Union(sets.New[string](logRequest.PodNameRegex))
 		mapNamespaceToLogRequest[logRequest.Namespace] = existingLogRequest
 	}
 	return mapNamespaceToLogRequest
@@ -169,6 +156,28 @@ func (c *ContainterLogFilter) getAndFilterContainerLogs(ctx context.Context, con
 	return sb.String(), nil
 }
 
+func (c *ContainterLogFilter) getLogAndWriteToFile(ctx context.Context, containerLogReq ContainerLogRequest) {
+	stringData, err := c.getAndFilterContainerLogs(ctx, containerLogReq)
+	if err != nil {
+		log.Default().Printf("Can't read the container logs for namespace %s and container %s: %v\n",
+			containerLogReq.Namespace, containerLogReq.ContainerName, err)
+		return
+	}
+	if len(stringData) == 0 {
+		return
+	}
+	path := fmt.Sprintf("log_data/%s/%s/%s.log",
+		containerLogReq.Namespace, containerLogReq.PodName, containerLogReq.ContainerName)
+	dirPath := fmt.Sprintf("log_data/%s/%s/", containerLogReq.Namespace, containerLogReq.PodName)
+	err = os.MkdirAll(dirPath, os.ModePerm)
+	if err != nil {
+		log.Fatalf("failed to create output dir: %v", err)
+	}
+	err = fileUtils.WriteToFile(path, stringData)
+	if err != nil {
+		log.Fatalf("failed to write to file %s: %v", path, err)
+	}
+}
 func stringInSlice(set sets.Set[string], s string) bool {
 	for str := range set {
 		if strings.Contains(s, str) {

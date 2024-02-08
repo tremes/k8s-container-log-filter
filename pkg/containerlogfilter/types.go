@@ -19,7 +19,7 @@ type LogRequestDefinition struct {
 
 type LogRequest struct {
 	Namespace    string
-	PodNameRegex string
+	PodNameRegex sets.Set[string]
 	Messages     sets.Set[string]
 }
 
