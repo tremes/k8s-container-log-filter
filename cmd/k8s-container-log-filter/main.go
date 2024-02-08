@@ -44,6 +44,8 @@ func initKubeClient(kubeConfigPath string) (*kubernetes.Clientset, error) {
 	if err != nil {
 		return nil, err
 	}
+	config.QPS = 15
+	config.Burst = 30
 
 	return kubernetes.NewForConfig(config)
 }
