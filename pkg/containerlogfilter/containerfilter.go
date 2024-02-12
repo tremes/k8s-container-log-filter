@@ -150,12 +150,16 @@ func (c *ContainterLogFilter) getAndFilterContainerLogs(ctx context.Context, con
 	scanner := bufio.NewScanner(stream)
 	var sb strings.Builder
 	for scanner.Scan() {
-		text := scanner.Text()
-		if containerLogRequest.MessageRegex.MatchString(text) {
-			sb.WriteString(fmt.Sprintf("%s\n", text))
+		line := scanner.Bytes()
+		if containerLogRequest.MessageRegex.Match(line) {
+			line = append(line, '\n')
+			_, err = sb.Write(line)
+			if err != nil {
+				log.Default().Printf("Failed to write line for container %s in the %s: %v",
+					containerLogRequest.ContainerName, containerLogRequest.Namespace, err)
+			}
 		}
 	}
-
 	return sb.String(), nil
 }
 
