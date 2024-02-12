@@ -142,12 +142,12 @@ func (c *ContainterLogFilter) getAndFilterContainerLogs(ctx context.Context, con
 		SinceSeconds: c.sinceSeconds,
 		Timestamps:   true,
 	})
-	reader, err := req.Stream(ctx)
+	stream, err := req.Stream(ctx)
 	if err != nil {
 		return "", err
 	}
-	scanner := bufio.NewScanner(reader)
-
+	defer stream.Close()
+	scanner := bufio.NewScanner(stream)
 	var sb strings.Builder
 	for scanner.Scan() {
 		text := scanner.Text()
