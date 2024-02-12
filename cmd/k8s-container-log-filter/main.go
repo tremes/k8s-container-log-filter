@@ -8,6 +8,7 @@ import (
 	"k8s-container-log-filter/pkg/containerlogfilter"
 	"log"
 	"os"
+	"runtime/pprof"
 	"time"
 
 	"k8s.io/client-go/kubernetes"
@@ -16,7 +17,17 @@ import (
 
 func main() {
 	startTime := time.Now()
-	kubeConfigPath, logRequestsFile, timeout, sinceHours := parseArgs()
+	kubeConfigPath, logRequestsFile, timeout, sinceHours, cpuprofile := parseArgs()
+
+	if cpuprofile {
+		f, err := os.Create("cpuprofile")
+		if err != nil {
+			log.Fatal(err)
+		}
+		pprof.StartCPUProfile(f)
+		defer pprof.StopCPUProfile()
+	}
+
 	kubeCli, err := initKubeClient(kubeConfigPath)
 	if err != nil {
 		log.Fatalf("Failed to create Kubernetes client client: %v\n", err)
@@ -63,21 +74,23 @@ func readInputDataAndUnmarshal(fileName string) (containerlogfilter.LogRequestsO
 	return logRequests, nil
 }
 
-func parseArgs() (string, string, int, int64) {
+func parseArgs() (string, string, int, int64, bool) {
 	var kubeConfigPath, logRequestsFile string
 	var timeout int
 	var sinceHours int64
+	var cpuprofile bool
 
 	flag.StringVar(&kubeConfigPath, "kubeconfig", fmt.Sprintf("%s/%s", os.Getenv("HOME"), ".kube/config"),
 		"Path to kubeconfig file")
 	flag.IntVar(&timeout, "timeout", 2, "Timeout in minutes. Default value is 2 minutes")
 	flag.StringVar(&logRequestsFile, "log_requests_file", "log_requests.json", "Path to the file with log requests definition")
 	flag.Int64Var(&sinceHours, "since_hours", 24, " Tells how old logs should be filtered")
+	flag.BoolVar(&cpuprofile, "cpuprofile", false, " Enabled CPU profiling")
 
 	flag.Parse()
 	if kubeConfigPath == "" {
 		flag.PrintDefaults()
 		os.Exit(1)
 	}
-	return kubeConfigPath, logRequestsFile, timeout, sinceHours
+	return kubeConfigPath, logRequestsFile, timeout, sinceHours, cpuprofile
 }
