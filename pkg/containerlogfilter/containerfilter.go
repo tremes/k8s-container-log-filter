@@ -19,9 +19,10 @@ import (
 )
 
 type ContainterLogFilter struct {
-	kubeClient     kubernetes.Clientset
-	logRequestsObj LogRequestsObject
-	sinceSeconds   *int64
+	kubeClient                kubernetes.Clientset
+	logRequestsObj            LogRequestsObject
+	sinceSeconds              *int64
+	numberOfContainersScanned atomic.Int32
 }
 
 func New(kubeClient kubernetes.Clientset, logRequests LogRequestsObject, sinceSeconds int64) *ContainterLogFilter {
@@ -34,8 +35,6 @@ func New(kubeClient kubernetes.Clientset, logRequests LogRequestsObject, sinceSe
 
 func (c *ContainterLogFilter) Run(ctx context.Context) {
 	namespaceToLogRequest := c.createNamespaceToLogRequestMap()
-	var numberOfContainers atomic.Int32
-
 	var wg sync.WaitGroup
 	for _, logRequest := range namespaceToLogRequest {
 		log.Default().Printf("Start checking namespace %s for the Pod name pattern %s\n", logRequest.Namespace, logRequest.PodNameRegex)
@@ -66,7 +65,6 @@ func (c *ContainterLogFilter) Run(ctx context.Context) {
 				for podName, containersaNames := range podToContainers {
 					wgContainers.Add(len(containersaNames))
 					for _, container := range containersaNames {
-						numberOfContainers.Add(1)
 						containerLogReq := ContainerLogRequest{
 							Namespace:     logRequest.Namespace,
 							ContainerName: container,
@@ -84,7 +82,7 @@ func (c *ContainterLogFilter) Run(ctx context.Context) {
 		}
 	}
 	wg.Wait()
-	log.Default().Printf("Number of checked containers %d", numberOfContainers.Load())
+	log.Default().Printf("Number of checked containers %d", c.numberOfContainersScanned.Load())
 }
 
 // createPodToContainersMap lists all the Pods in the provided namespace
@@ -170,6 +168,7 @@ func (c *ContainterLogFilter) getLogAndWriteToFile(ctx context.Context, containe
 			containerLogReq.Namespace, containerLogReq.ContainerName, err)
 		return
 	}
+	c.numberOfContainersScanned.Add(1)
 	if len(stringData) == 0 {
 		return
 	}
